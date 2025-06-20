@@ -104,16 +104,16 @@ if uploaded_zip:
                         with open(input_path, "r", encoding="utf-8") as f:
                             oldpm_raw = f.read()
 
-                        # Try parsing and checking if already valid
+                        
                         try:
                             oldpm = json.loads(oldpm_raw)
                             validate(instance=oldpm, schema=schema)
-                            st.info(f"{file} already conforms to v2.2.0. Skipping conversion.")
+                            st.info(f"{file} is already in v2.2.0. Skipping conversion.")
                             continue
                         except:
-                            pass  # proceed to conversion
+                            pass 
 
-                        # First attempt
+                        
                         newpm = generate_postman_v22(oldpm_raw)
 
                         try:
@@ -121,7 +121,7 @@ if uploaded_zip:
                             validate(instance=parsed, schema=schema)
                             st.success(f"{file} is valid Postman v2.2 JSON")
                         except (json.JSONDecodeError, ValidationError) as ve:
-                            st.warning(f"{file} failed initial validation. Retrying...")
+                            st.warning(f"{file} failed initial validation. Retrying,,,")
                             try:
                                 newpm = generate_postman_v22(oldpm_raw)
                                 parsed = json.loads(newpm)
@@ -129,9 +129,9 @@ if uploaded_zip:
                                 st.success(f"{file} is valid Postman v2.2 JSON after retry")
                             except Exception as retry_error:
                                 st.warning(f"{file} is still invalid after retry:\n{retry_error}")
-                                continue  # skip saving
+                                continue  
 
-                        # Save the converted file
+                        
                         base_name = Path(file).stem
                         output_path = os.path.join(converted_dir, f"{base_name}_converted.json")
                         with open(output_path, "w", encoding="utf-8") as out_f:
