@@ -12,7 +12,6 @@ from jsonschema import validate, ValidationError
 load_dotenv()
 api_url = os.getenv("AZURE_URL")
 
-# Load Postman v2.2.0 JSON schema for validation
 schema = None
 try:
     schema_url = "https://schema.getpostman.com/json/collection/v2.2.0/collection.json"
@@ -35,6 +34,47 @@ st.set_page_config(page_title="Postman Bulk Converter")
 st.title("Convert All Postman JSONs from a Zipped Folder")
 
 uploaded_zip = st.file_uploader("Upload a zipped folder of Postman collections (.zip)", type="zip")
+def generate_postman_v22_again(oldpm_raw, oldjson):
+    prompt = f"""
+<|system|>
+You are a helpful assistant that corrects the format of the Postman v2.2.0 correctly.
+
+<|user|>
+Convert the following Postman JSON (v2.2.0) to the proper format of Postman v2.2.0.
+
+Make the following changes:
+- Convert old-style test assertions like `tests[\"name\"] = ...` to the newer `pm.test(...)` format properly.
+- Replace boolean-based expressions (e.g., `tests[\"Status code is 200\"] = responseCode.code === 200`) with BDD-style assertions using `pm.test(...)` and `pm.expect(...)` correctly. 
+- Use the `pm.response` object instead of legacy variables like `responseBody` or `responseCode`.
+  - Replace `responseBody` with `pm.response.json()`.
+  - Replace `responseCode.code` with `pm.response.code`.
+- Example transformation:
+  - From: `tests[\"Status code is 200\"] = responseCode.code === 200;`
+  - To: `pm.test(\"Status code is 200\", function () {{ pm.expect(pm.response.code).to.eql(200); }});`
+
+Output only valid **Postman v2.2.0** JSON content with updated script blocks.  
+Do **not** include any extra text, markdown, or formatting.  
+If the input is not a valid Postman JSON object, return an empty JSON object.
+
+```json
+{oldpm_raw}
+"""
+    payload = {
+        "systemprompt": "",
+        "userprompt": prompt,
+        "message": [],
+        "model": "gpt-4.1-mini"
+    }
+    response = requests.post(api_url, json=payload, timeout=180)
+    response.raise_for_status()
+    newpm = response.text.strip()
+
+    if newpm.startswith("```json"):
+        newpm = newpm[7:]
+    if newpm.endswith("```"):
+        newpm = newpm[:-3]
+
+    return newpm
 
 def generate_postman_v22(oldpm_raw):
     prompt = f"""
@@ -42,9 +82,10 @@ def generate_postman_v22(oldpm_raw):
 You are a helpful assistant that converts old Postman test scripts from legacy format (v2.1.0) to the modern format (v2.2.0).
 
 <|user|>
-Convert the following old Postman JSON (v2.1.0) to the updated Postman v2.2.0 format.
+Convert the following old Postman JSON (v2.1.0) to the updated Postman v2.2.0 format. 
 
 Make the following changes:
+- If the input has some part of it already in v2.2.0 format, skip those parts and only convert the legacy parts.
 - Convert old-style test assertions like `tests[\"name\"] = ...` to the newer `pm.test(...)` format.
 - Replace boolean-based expressions (e.g., `tests[\"Status code is 200\"] = responseCode.code === 200`) with BDD-style assertions using `pm.test(...)` and `pm.expect(...)`.
 - Use the `pm.response` object instead of legacy variables like `responseBody` or `responseCode`.
@@ -67,7 +108,7 @@ If the input is not a valid Postman JSON object, return an empty JSON object.
         "message": [],
         "model": "gpt-4.1-mini"
     }
-    response = requests.post(api_url, json=payload, timeout=180)
+    response = requests.post(api_url, json=payload, timeout=1600)
     response.raise_for_status()
     newpm = response.text.strip()
 
@@ -108,10 +149,10 @@ if uploaded_zip:
                         try:
                             oldpm = json.loads(oldpm_raw)
                             validate(instance=oldpm, schema=schema)
-                            st.info(f"{file} is already in v2.2.0. Skipping conversion.")
+                            st.info(f"{file} already conforms to v2.2.0. Skipping conversion.")
                             continue
                         except:
-                            pass 
+                            pass
 
                         
                         newpm = generate_postman_v22(oldpm_raw)
@@ -121,15 +162,15 @@ if uploaded_zip:
                             validate(instance=parsed, schema=schema)
                             st.success(f"{file} is valid Postman v2.2 JSON")
                         except (json.JSONDecodeError, ValidationError) as ve:
-                            st.warning(f"{file} failed initial validation. Retrying,,,")
+                            st.warning(f"{file} failed 1st validation, Retrying...")
                             try:
-                                newpm = generate_postman_v22(oldpm_raw)
+                                newpm = generate_postman_v22_again(oldpm_raw, newpm)
                                 parsed = json.loads(newpm)
                                 validate(instance=parsed, schema=schema)
                                 st.success(f"{file} is valid Postman v2.2 JSON after retry")
                             except Exception as retry_error:
                                 st.warning(f"{file} is still invalid after retry:\n{retry_error}")
-                                continue  
+                                continue 
 
                         
                         base_name = Path(file).stem
