@@ -70,13 +70,18 @@ def generate_script_v22(old_script):
 You are a helpful assistant that converts old Postman test scripts from legacy format (v2.1.0) to the modern format (v2.2.0).
 
 <|user|>
-Convert the following old Postman test script to the updated Postman v2.2.0 format. But retain the version as v2.1.0 in the schema only.
+Convert the following old Postman test script to the updated Postman v2.2.0 format. But retain the version as v2.1.0 in the schema only. If the script is empty, leave it empty **DO NOT** add any sample code. Also do not add the word "javascript" or "js" at the start of the script.
 
 Make the following changes:
+- Do not change the logic of the script, just update the sytax.
+- Do not change the variable names and structure.
+- Do not give me any examples of how to use the new syntax or provide any additional explanations.
 - Replace tests["..."] = with pm.test(...)
+- Replace deprecated features like eval(globals.<var>)
 - Use pm.expect(...) assertions
 - Replace responseBody with pm.response.json()
 - Replace responseCode.code with pm.response.code
+- Do not use postman.setGlobalVariable or postman.setEnvironmentVariable, use pm.globals.set and pm.variables.set respectively instead.
 
 Output only the converted script as plain JS.
 
@@ -88,7 +93,7 @@ Output only the converted script as plain JS.
         "message": [],
         "model": "gpt-4.1-mini"
     }
-    response = requests.post(api_url, json=payload, timeout=1600)
+    response = requests.post(api_url, json=payload, timeout=3200)
     response.raise_for_status()
     return response.text.strip().strip('`\n"\' ')
 
@@ -119,12 +124,33 @@ def convert_scripts_in_collection(obj):
         for key, value in obj.items():
             if key == "script" and isinstance(value, dict) and "exec" in value:
                 old_exec = value["exec"]
-                script_text = "\n".join(old_exec) if isinstance(old_exec, list) else str(old_exec)
-                try:
-                    new_script = generate_script_v22(script_text)
-                    value["exec"] = new_script.splitlines() if new_script else []
-                except Exception as e:
-                    st.warning(f"Script conversion failed: {e}")
+                if isinstance(old_exec, list) and all(line.strip() == "" for line in old_exec):
+                    value["exec"] = []
+                else:
+                    script_text = "\n".join(old_exec) if isinstance(old_exec, list) else str(old_exec)
+                    try:
+                        new_script = generate_script_v22(script_text)
+                        cleaned_script = new_script.strip()
+                        for prefix in ["javascript", "js"]:
+                            if cleaned_script.lower().startswith(prefix):
+                                cleaned_script = cleaned_script[len(prefix):].lstrip(':').lstrip('\n').lstrip()
+                        def is_balanced(s):
+                            stack = []
+                            pairs = {')': '(', '}': '{', ']': '['}
+                            for c in s:
+                                if c in '({[':
+                                    stack.append(c)
+                                elif c in ')}]':
+                                    if not stack or stack[-1] != pairs[c]:
+                                        return False
+                                    stack.pop()
+                            return not stack
+                        if not cleaned_script or not is_balanced(cleaned_script):
+                            value["exec"] = []
+                        else:
+                            value["exec"] = cleaned_script.splitlines()
+                    except Exception as e:
+                        st.warning(f"Script conversion failed: {e}")
             else:
                 convert_scripts_in_collection(value)
     elif isinstance(obj, list):
