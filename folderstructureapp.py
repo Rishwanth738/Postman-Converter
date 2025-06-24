@@ -80,33 +80,34 @@ Convert the following Postman {type} script to modern syntax. Schema version sho
 Instructions:
 1. Do not change the logic or structure of the script.
 2. If the script is empty, return an empty string.
-3. Do not add extra sample code or usage examples or the words "javascript" or "js".
+3. Do not add extra sample code or usage examples or the words "javascript" or "js" or add comments in between the code.
 4. Keep the number of tests same as in the original script.
-5. Keep in mind that there is no function like pm.response.json(...).has() and also **eval method should not be used at all**
+5. Keep in mind that there is no function like pm.response.json(...).has().
 6. **DO NOT** give me a script which would lead to a no tests found error in Postman.
 7. Do not use pm.response in pre request scripts.
 8. Preserve original test descriptions; do not reword test titles.
+9. Do not add any new functions or variables that were not in the original test or pre response script.
+10.Do not use pm.globals.get(...) in pre request scripts and do not use pm.globals.set(...) in test scripts unless the older script had it.
 
 ### Syntax changes:
 - Replace `tests["..."] =` with `pm.test(...)`.
 - Use `pm.expect(...)` instead of other assertions.
 - Replace `responseBody` with `pm.response.json()`.
 - Replace `responseCode.code` with `pm.response.code`.
+- Replace all `postman.setGlobalVariable(...)` with `pm.globals.set(...)`.
 
 
 ### Global utilities:
-- If a global function (e.g., funcUtils) is used:
-  - It must be stored using:
-    `pm.globals.set('funcUtilsExclusive', function loadFuncUtils() {{ return {{ ... }}; }} + ')()');`
-  - Retrieve it using:
-    ```js
-    let funcUtilsString = pm.globals.get("funcUtilsExclusive");
-    eval(funcUtilsString);
-    ```
-  - Do not add `loadFuncUtils()` or modify this structure.
+- If a global function is used like postman.setGlobalVariable('function_name', ...), it must be replaced in a specific way:
+  - If the script is of pre response then the function must be stored in the format:
+    pm.globals.set(function_name, function_call()){{code_here}} + 'function_call()');
+  - If the script is of test type retrieve it using:
+    let function_call = pm.globals.get("function_name");
+    eval(function_call);
+    where `function_name` is the name of the function and `function_call` is the global variable name which you get from the older script and `code_here` is the modified code of the original function in the new format and then use it in the script.
+  
 
 ### Validations:
-- Wrap function calls in `try/catch` with checks like `typeof <fn> === 'function'`.
 - If a global function is referenced but undefined, add a warning comment.
 - Never remove or change variable names or test count.
 
