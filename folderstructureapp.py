@@ -43,11 +43,16 @@ def salvage_partial_json(raw_str):
     try:
         return json.loads(fixed), "Partial JSON salvaged by auto-closing braces/brackets.", True
     except Exception:
+        st.write("Could not salvage any valid JSON from output.")
         return None, "Could not salvage any valid JSON from output.", False
 
 
 load_dotenv()
 api_url = os.getenv("AZURE_URL")
+
+if not api_url or not api_url.strip():
+    st.error("AZURE_URL is not set in your .env file or is empty. Please check your .env configuration.")
+    st.stop()
 
 schema = None
 try:
@@ -64,29 +69,52 @@ st.title("Convert All Postman JSONs from a Zipped Folder")
 uploaded_zip = st.file_uploader("Upload a zipped folder of Postman collections (.zip)", type="zip")
 
 
-def generate_script_v22(old_script):
-    prompt = f"""
+def generate_script_v22(old_script, type):
+    prompt = f'''
 <|system|>
-You are a helpful assistant that converts old Postman test scripts from legacy format (v2.1.0) to the modern format (v2.2.0).
+You are an excellent and helpful assistant that converts old Postman scripts from legacy format (v2.1.0) to the modern format (v2.2.0). Retain the version as v2.1.0 in the schema only. If the script is empty, leave it empty.
 
 <|user|>
-Convert the following old Postman test script to the updated Postman v2.2.0 format. But retain the version as v2.1.0 in the schema only. If the script is empty, leave it empty **DO NOT** add any sample code. Also do not add the word "javascript" or "js" at the start of the script.
+Convert the following Postman {type} script to modern syntax. Schema version should stay v2.1.0.
 
-Make the following changes:
-- Do not change the logic of the script, just update the sytax.
-- Do not change the variable names and structure.
-- Do not give me any examples of how to use the new syntax or provide any additional explanations.
-- Replace tests["..."] = with pm.test(...)
-- Replace deprecated features like eval(globals.<var>)
-- Use pm.expect(...) assertions
-- Replace responseBody with pm.response.json()
-- Replace responseCode.code with pm.response.code
-- Do not use postman.setGlobalVariable or postman.setEnvironmentVariable, use pm.globals.set and pm.variables.set respectively instead.
+Instructions:
+1. Do not change the logic or structure of the script.
+2. If the script is empty, return an empty string.
+3. Do not add extra sample code or usage examples or the words "javascript" or "js".
+4. Keep the number of tests same as in the original script.
+5. Keep in mind that there is no function like pm.response.json(...).has() and also **eval method should not be used at all**
+6. **DO NOT** give me a script which would lead to a no tests found error in Postman.
+7. Do not use pm.response in pre request scripts.
+8. Preserve original test descriptions; do not reword test titles.
 
-Output only the converted script as plain JS.
+### Syntax changes:
+- Replace `tests["..."] =` with `pm.test(...)`.
+- Use `pm.expect(...)` instead of other assertions.
+- Replace `responseBody` with `pm.response.json()`.
+- Replace `responseCode.code` with `pm.response.code`.
+
+
+### Global utilities:
+- If a global function (e.g., funcUtils) is used:
+  - It must be stored using:
+    `pm.globals.set('funcUtilsExclusive', function loadFuncUtils() {{ return {{ ... }}; }} + ')()');`
+  - Retrieve it using:
+    ```js
+    let funcUtilsString = pm.globals.get("funcUtilsExclusive");
+    eval(funcUtilsString);
+    ```
+  - Do not add `loadFuncUtils()` or modify this structure.
+
+### Validations:
+- Wrap function calls in `try/catch` with checks like `typeof <fn> === 'function'`.
+- If a global function is referenced but undefined, add a warning comment.
+- Never remove or change variable names or test count.
+
+### Output:
+Return the converted test script **as plain JavaScript only**, no extra comments, explanations, or markdown.
 
 {old_script}
-"""
+'''
     payload = {
         "systemprompt": "",
         "userprompt": prompt,
@@ -119,43 +147,57 @@ Update this collection to Postman v2.2.0 with proper test scripts (pm.test, pm.e
     fixed = response.text.strip().removeprefix("```json").removesuffix("```").strip()
     return fixed
 
-def convert_scripts_in_collection(obj):
+def convert_scripts_in_collection(obj, parent_listen=None):
     if isinstance(obj, dict):
-        for key, value in obj.items():
-            if key == "script" and isinstance(value, dict) and "exec" in value:
-                old_exec = value["exec"]
-                if isinstance(old_exec, list) and all(line.strip() == "" for line in old_exec):
-                    value["exec"] = []
-                else:
-                    script_text = "\n".join(old_exec) if isinstance(old_exec, list) else str(old_exec)
-                    try:
-                        new_script = generate_script_v22(script_text)
-                        cleaned_script = new_script.strip()
-                        for prefix in ["javascript", "js"]:
-                            if cleaned_script.lower().startswith(prefix):
-                                cleaned_script = cleaned_script[len(prefix):].lstrip(':').lstrip('\n').lstrip()
-                        def is_balanced(s):
-                            stack = []
-                            pairs = {')': '(', '}': '{', ']': '['}
-                            for c in s:
-                                if c in '({[':
-                                    stack.append(c)
-                                elif c in ')}]':
-                                    if not stack or stack[-1] != pairs[c]:
-                                        return False
-                                    stack.pop()
-                            return not stack
-                        if not cleaned_script or not is_balanced(cleaned_script):
-                            value["exec"] = []
-                        else:
-                            value["exec"] = cleaned_script.splitlines()
-                    except Exception as e:
-                        st.warning(f"Script conversion failed: {e}")
+        # Process collection-level or folder-level 'event' array
+        if "event" in obj and isinstance(obj["event"], list):
+            for event in obj["event"]:
+                listen_type = event.get("listen", None)
+                if "script" in event:
+                    convert_scripts_in_collection(event, parent_listen=listen_type)
+        # Process script at this level (if any)
+        if "script" in obj and isinstance(obj["script"], dict) and "exec" in obj["script"]:
+            value = obj["script"]
+            old_exec = value["exec"]
+            if isinstance(old_exec, list) and all(line.strip() == "" for line in old_exec):
+                value["exec"] = []
             else:
-                convert_scripts_in_collection(value)
+                script_text = "\n".join(old_exec) if isinstance(old_exec, list) else str(old_exec)
+                try:
+                    script_type = parent_listen if parent_listen in ("prerequest", "test") else "test"
+                    new_script = generate_script_v22(script_text, script_type)
+                    cleaned_script = new_script.strip()
+                    for prefix in ["javascript", "js"]:
+                        if cleaned_script.lower().startswith(prefix):
+                            cleaned_script = cleaned_script[len(prefix):].lstrip(':').lstrip('\n').lstrip()
+                    def is_balanced(s):
+                        stack = []
+                        pairs = {')': '(', '}': '{', ']': '['}
+                        for c in s:
+                            if c in '({[':
+                                stack.append(c)
+                            elif c in ')}]':
+                                if not stack or stack[-1] != pairs[c]:
+                                    return False
+                                stack.pop()
+                        return not stack
+                    if not cleaned_script or not is_balanced(cleaned_script):
+                        value["exec"] = []
+                    else:
+                        value["exec"] = cleaned_script.splitlines()
+                except Exception as e:
+                    st.warning(f"Script conversion failed: {e}")
+        # Always recurse into 'item' arrays (folders/requests)
+        if "item" in obj and isinstance(obj["item"], list):
+            for subitem in obj["item"]:
+                convert_scripts_in_collection(subitem)
+        # Also process any other dict/list values (for robustness)
+        for key, value in obj.items():
+            if key not in ("event", "script", "item"):
+                convert_scripts_in_collection(value, parent_listen=parent_listen)
     elif isinstance(obj, list):
         for item in obj:
-            convert_scripts_in_collection(item)
+            convert_scripts_in_collection(item, parent_listen=parent_listen)
 
 
 if uploaded_zip:
