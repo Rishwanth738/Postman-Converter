@@ -81,38 +81,42 @@ Instructions:
 1. Do not change the logic or structure of the script.
 2. If the script is empty, return an empty string.
 3. Do not add extra sample code or usage examples or the words "javascript" or "js" or add comments in between the code.
-4. Keep the number of tests same as in the original script.
-5. Keep in mind that there is no function like pm.response.json(...).has().
-6. **DO NOT** give me a script which would lead to a no tests found error in Postman.
-7. Do not use pm.response in pre request scripts.
-8. Preserve original test descriptions; do not reword test titles.
-9. Do not add any new functions or variables that were not in the original test or pre response script.
-10.Do not use pm.globals.get(...) in pre request scripts and do not use pm.globals.set(...) in test scripts unless the older script had it.
+4. Retain the original function names and variable names.
+5. When using `pm.response.json()`, assign it to a variable named `response`, and assign `response.data || {{}}` to a variable named `nr`. Do **not** try to access `nr.data.property`, instead use `nr.property` — `nr` itself is already the `data` section.
+6. Never write `pm.expect(nr.data).to.have.property(...)` — that's incorrect. Use `pm.expect(nr).to.have.property(...)` instead.
+7. Keep in mind that there is no function like `pm.response.json(...).has()`. Use `.hasOwnProperty(...)` safely.
+8. **DO NOT** give me a script which would lead to a “no tests found” error in Postman.
+9. Do not use `pm.response` inside Pre-request scripts.
+10. Preserve original test descriptions; do not reword test titles.
+11. Do not add any new functions or variables unless they existed in the original test or pre-request script.
+12. Do not use `JSON.parse(pm.response.json())` — `pm.response.json()` is already parsed.
+13. Do not use `pm.globals.get(...)` in Pre-request scripts and do not use `pm.globals.set(...)` in Test scripts unless the original script used them.
 
 ### Syntax changes:
 - Replace `tests["..."] =` with `pm.test(...)`.
-- Use `pm.expect(...)` instead of other assertions.
+- Use `pm.expect(...)` instead of other assertion styles.
 - Replace `responseBody` with `pm.response.json()`.
 - Replace `responseCode.code` with `pm.response.code`.
 - Replace all `postman.setGlobalVariable(...)` with `pm.globals.set(...)`.
 
-
 ### Global utilities:
-- If a global function is used like postman.setGlobalVariable('function_name', ...), it must be replaced in a specific way:
-  - If the script is of pre response then the function must be stored in the format:
-    pm.globals.set(function_name, function_call()){{code_here}} + 'function_call()');
-  - If the script is of test type retrieve it using:
+- If a global function is stored using `postman.setGlobalVariable('function_name', ...)`, convert it as follows:
+  - For Pre-request scripts:  
+    `pm.globals.set(function_name, function_call() {{ ... }} + 'function_call()');`
+  - For Test scripts:
+    ```js
     let function_call = pm.globals.get("function_name");
     eval(function_call);
-    where `function_name` is the name of the function and `function_call` is the global variable name which you get from the older script and `code_here` is the modified code of the original function in the new format and then use it in the script.
-  
+    function_call();
+    ```
+    Ensure `function_call` and `function_name` are different strings to avoid name collision.
 
 ### Validations:
 - If a global function is referenced but undefined, add a warning comment.
-- Never remove or change variable names or test count.
+- Never remove or rename variables or change test count.
 
 ### Output:
-Return the converted test script **as plain JavaScript only**, no extra comments, explanations, or markdown.
+Return the converted script **as plain JavaScript only**, with no additional comments, markdown, or explanation.
 
 {old_script}
 '''
@@ -148,15 +152,55 @@ Update this collection to Postman v2.2.0 with proper test scripts (pm.test, pm.e
     fixed = response.text.strip().removeprefix("```json").removesuffix("```").strip()
     return fixed
 
+def generate_script_v22_fix(truncated_script, original_script, script_type):
+    prompt = f'''
+<|system|>
+You are a helpful assistant that completes and repairs truncated or incomplete Postman {script_type} scripts. The previous LLM response was truncated or incomplete. Your job is to finish the script correctly, preserving all logic, function names, and structure from the original input.
+
+Instructions:
+1. Do **not** rewrite the entire script.
+2. Return **only** the missing or final portion needed to complete the truncated script.
+3. If the script is nearly complete and just missing a closing `}}` or `);`, append it **exactly as needed** and include the correct `+ 'function_name()');` if it’s a global function assignment.
+4. If the input is a pre-request script and ends with a function stored using `pm.globals.set(...)`, ensure the function ends with this format:
+   ```js
+   }} + 'function_name()');
+   ```
+   where function_name is the actual function that will be invoked after storing it. If its already in that format, do not make any changes to it.
+5. Maintain all original function names and variable names.
+6. Never change the logic, restructure blocks, or reword test descriptions.
+7. Do not return duplicate or rewritten code. Only return what's missing from the end.
+8. Return JavaScript only with no extra comments, no explanations, and no markdown.
+
+<|user|>
+The following is a truncated or incomplete Postman {script_type} script (output from a previous LLM call):
+---
+{truncated_script}
+---
+
+Here is the original input script that was supposed to be converted:
+---
+{original_script}
+---
+
+Please complete and repair the truncated output by appending from the end of the above truncated script the correct converted logic of the original script, returning the full, valid, and modernized Postman {script_type} script as plain JavaScript only. Do not add any extra comments, explanations, or markdown. Finally append your output to the input and check if it is a valid function before returning only your output.
+'''
+    payload = {
+        "systemprompt": "",
+        "userprompt": prompt,
+        "message": [],
+        "model": "gpt-4.1-mini"
+    }
+    response = requests.post(api_url, json=payload, timeout=3200)
+    response.raise_for_status()
+    return response.text.strip().strip('`\n"\' ')
+
 def convert_scripts_in_collection(obj, parent_listen=None):
     if isinstance(obj, dict):
-        # Process collection-level or folder-level 'event' array
         if "event" in obj and isinstance(obj["event"], list):
             for event in obj["event"]:
                 listen_type = event.get("listen", None)
                 if "script" in event:
                     convert_scripts_in_collection(event, parent_listen=listen_type)
-        # Process script at this level (if any)
         if "script" in obj and isinstance(obj["script"], dict) and "exec" in obj["script"]:
             value = obj["script"]
             old_exec = value["exec"]
@@ -171,7 +215,7 @@ def convert_scripts_in_collection(obj, parent_listen=None):
                     for prefix in ["javascript", "js"]:
                         if cleaned_script.lower().startswith(prefix):
                             cleaned_script = cleaned_script[len(prefix):].lstrip(':').lstrip('\n').lstrip()
-                    def is_balanced(s):
+                    def is_truncated(s):
                         stack = []
                         pairs = {')': '(', '}': '{', ']': '['}
                         for c in s:
@@ -179,20 +223,34 @@ def convert_scripts_in_collection(obj, parent_listen=None):
                                 stack.append(c)
                             elif c in ')}]':
                                 if not stack or stack[-1] != pairs[c]:
-                                    return False
+                                    return True
                                 stack.pop()
-                        return not stack
-                    if not cleaned_script or not is_balanced(cleaned_script):
+                        return bool(stack) 
+                    if not cleaned_script:
                         value["exec"] = []
+                    elif is_truncated(cleaned_script):
+                        fixed_script = generate_script_v22_fix(cleaned_script, script_text, script_type)
+                        new_script = fixed_script.strip()
+                        for prefix in ["javascript", "js"]:
+                            if new_script.lower().startswith(prefix):
+                                new_script = new_script[len(prefix):].lstrip(':').lstrip('\n').lstrip()
+                        cleaned_script += new_script
+                        # Check one more time for truncation
+                        if is_truncated(cleaned_script):
+                            fixed_script = generate_script_v22_fix(cleaned_script, script_text, script_type)
+                            new_script = fixed_script.strip()
+                            for prefix in ["javascript", "js"]:
+                                if new_script.lower().startswith(prefix):
+                                    new_script = new_script[len(prefix):].lstrip(':').lstrip('\n').lstrip()
+                            cleaned_script += new_script
+                        value["exec"] = cleaned_script.splitlines() if cleaned_script else []
                     else:
                         value["exec"] = cleaned_script.splitlines()
                 except Exception as e:
                     st.warning(f"Script conversion failed: {e}")
-        # Always recurse into 'item' arrays (folders/requests)
         if "item" in obj and isinstance(obj["item"], list):
             for subitem in obj["item"]:
                 convert_scripts_in_collection(subitem)
-        # Also process any other dict/list values (for robustness)
         for key, value in obj.items():
             if key not in ("event", "script", "item"):
                 convert_scripts_in_collection(value, parent_listen=parent_listen)
