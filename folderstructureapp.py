@@ -92,6 +92,31 @@ Instructions:
 12. Do not use `JSON.parse(pm.response.json())` — `pm.response.json()` is already parsed.
 13. Do not use `pm.globals.get(...)` in Pre-request scripts and do not use `pm.globals.set(...)` in Test scripts unless the original script used them.
 
+### Response structure:
+Assume all scripts reference a JSON structure like this (from `pm.response.json()`):
+
+{{
+  code: 0,
+  message: "success",
+  data: {{
+    summary_details: {{
+      down_count: ...,
+      downtime_duration: ...,
+      ...
+    }},
+    charts: [...],
+    info: {{...}},
+    availability_details: [...],
+    outage_details: [...],
+    profile_details: {{...}},
+    ...
+  }}
+}}
+14. Use the structure above to correctly navigate nested properties. For example:
+    - `data.summary_details.down_count` should be accessed via `response.summary_details.down_count`
+    - Never use `response.down_count` directly unless it is top-level (which it isn't in this structure).
+    - Always check if the parent (e.g., `summary_details`) exists before accessing its children.
+
 ### Syntax changes:
 - Replace `tests["..."] =` with `pm.test(...)`.
 - Use `pm.expect(...)` instead of other assertion styles.
@@ -152,24 +177,63 @@ Update this collection to Postman v2.2.0 with proper test scripts (pm.test, pm.e
     fixed = response.text.strip().removeprefix("```json").removesuffix("```").strip()
     return fixed
 
+def fix_syntax_v22(script):
+    prompt = f'''
+<|system|>
+You are an expert Postman script fixer that corrects syntax issues like extra brackets, missing semicolons, or other common JavaScript syntax errors in Postman scripts.
+<|user|>
+Fix the syntax issues in the following Postman script and return the corrected script. If its already valid, return it as it is.
+**DO NOT** change the logic, structure, or variable names. Only fix the syntax errors and return the corrected script as plain JavaScript only, without any comments or explanations.
+
+Return the fixed script as plain JavaScript only, with no extra comments, explanations, or markdown.
+{script}
+'''
+    payload = {
+        "systemprompt": "",
+        "userprompt": prompt,
+        "message": [],
+        "model": "gpt-4.1-mini"
+    }
+    response = requests.post(api_url, json=payload, timeout=3200)
+    response.raise_for_status()
+    return response.text.strip().strip('`\n"\' ')
+
 def generate_script_v22_fix(truncated_script, original_script, script_type):
     prompt = f'''
 <|system|>
-You are a helpful assistant that completes and repairs truncated or incomplete Postman {script_type} scripts. The previous LLM response was truncated or incomplete. Your job is to finish the script correctly, preserving all logic, function names, and structure from the original input.
+You are a helpful and an excellent assistant that completes truncated or incomplete Postman {script_type} scripts by continuing right off from where the previous LLM's response ended. The previous LLM response was truncated or incomplete. Your job is to finish the script correctly, preserving all logic, function names, and structure from the original input.
 
 Instructions:
 1. Do **not** rewrite the entire script.
 2. Return **only** the missing or final portion needed to complete the truncated script.
-3. If the script is nearly complete and just missing a closing `}}` or `);`, append it **exactly as needed** and include the correct `+ 'function_name()');` if it’s a global function assignment.
-4. If the input is a pre-request script and ends with a function stored using `pm.globals.set(...)`, ensure the function ends with this format:
-   ```js
-   }} + 'function_name()');
-   ```
-   where function_name is the actual function that will be invoked after storing it. If its already in that format, do not make any changes to it.
-5. Maintain all original function names and variable names.
-6. Never change the logic, restructure blocks, or reword test descriptions.
-7. Do not return duplicate or rewritten code. Only return what's missing from the end.
-8. Return JavaScript only with no extra comments, no explanations, and no markdown.
+3. Maintain all original function names and variable names.
+4. Never change the logic, restructure blocks, or reword test descriptions.
+5. Do not return duplicate or rewritten code. Only return what's missing from the end.
+6. Return JavaScript only with no extra comments, no explanations, and no markdown.
+
+### Response structure:
+Assume all scripts reference a JSON structure like this (from `pm.response.json()`):
+{{
+  code: 0,
+  message: "success",
+  data: {{
+    summary_details: {{
+      down_count: ...,
+      downtime_duration: ...,
+      ...
+    }},
+    charts: [...],
+    info: {{...}},
+    availability_details: [...],
+    outage_details: [...],
+    profile_details: {{...}},
+    ...
+  }}
+}}
+4. Use the structure above to correctly navigate nested properties. For example:
+    - `data.summary_details.down_count` should be accessed via `response.summary_details.down_count`
+    - Never use `response.down_count` directly unless it is top-level (which it isn't in this structure).
+    - Always check if the parent (e.g., `summary_details`) exists before accessing its children.
 
 <|user|>
 The following is a truncated or incomplete Postman {script_type} script (output from a previous LLM call):
@@ -243,6 +307,13 @@ def convert_scripts_in_collection(obj, parent_listen=None):
                                 if new_script.lower().startswith(prefix):
                                     new_script = new_script[len(prefix):].lstrip(':').lstrip('\n').lstrip()
                             cleaned_script += new_script
+                            if is_truncated(cleaned_script):
+                                fixed_script = fix_syntax_v22(cleaned_script)
+                                new_script = fixed_script.strip()
+                                for prefix in ["javascript", "js"]:
+                                    if new_script.lower().startswith(prefix):
+                                        new_script = new_script[len(prefix):].lstrip(':').lstrip('\n').lstrip()
+                                cleaned_script = new_script
                         value["exec"] = cleaned_script.splitlines() if cleaned_script else []
                     else:
                         value["exec"] = cleaned_script.splitlines()
