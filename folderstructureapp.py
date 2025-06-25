@@ -94,7 +94,6 @@ Instructions:
 
 ### Response structure:
 Assume all scripts reference a JSON structure like this (from `pm.response.json()`):
-
 {{
   code: 0,
   message: "success",
@@ -112,10 +111,12 @@ Assume all scripts reference a JSON structure like this (from `pm.response.json(
     ...
   }}
 }}
+
 14. Use the structure above to correctly navigate nested properties. For example:
-    - `data.summary_details.down_count` should be accessed via `response.summary_details.down_count`
+    - `data.summary_details.down_count` should be accessed via `nr.summary_details.down_count`
     - Never use `response.down_count` directly unless it is top-level (which it isn't in this structure).
     - Always check if the parent (e.g., `summary_details`) exists before accessing its children.
+    - If the property is an array (like `charts` or `outage_details`), use a `for` loop to iterate and check each element.
 
 ### Syntax changes:
 - Replace `tests["..."] =` with `pm.test(...)`.
@@ -129,11 +130,9 @@ Assume all scripts reference a JSON structure like this (from `pm.response.json(
   - For Pre-request scripts:  
     `pm.globals.set(function_name, function_call() {{ ... }} + 'function_call()');`
   - For Test scripts:
-    ```js
     let function_call = pm.globals.get("function_name");
     eval(function_call);
     function_call();
-    ```
     Ensure `function_call` and `function_name` are different strings to avoid name collision.
 
 ### Validations:
@@ -241,7 +240,7 @@ The following is a truncated or incomplete Postman {script_type} script (output 
 {truncated_script}
 ---
 
-Here is the original input script that was supposed to be converted:
+Here is the original input script that was supposed to be converted to the new format:
 ---
 {original_script}
 ---
@@ -293,27 +292,23 @@ def convert_scripts_in_collection(obj, parent_listen=None):
                     if not cleaned_script:
                         value["exec"] = []
                     elif is_truncated(cleaned_script):
-                        fixed_script = generate_script_v22_fix(cleaned_script, script_text, script_type)
-                        new_script = fixed_script.strip()
-                        for prefix in ["javascript", "js"]:
-                            if new_script.lower().startswith(prefix):
-                                new_script = new_script[len(prefix):].lstrip(':').lstrip('\n').lstrip()
-                        cleaned_script += new_script
-                        # Check one more time for truncation
-                        if is_truncated(cleaned_script):
+                        max_attempts = 7
+                        attempts = 0
+                        while is_truncated(cleaned_script) and attempts < max_attempts:
                             fixed_script = generate_script_v22_fix(cleaned_script, script_text, script_type)
                             new_script = fixed_script.strip()
                             for prefix in ["javascript", "js"]:
                                 if new_script.lower().startswith(prefix):
                                     new_script = new_script[len(prefix):].lstrip(':').lstrip('\n').lstrip()
                             cleaned_script += new_script
-                            if is_truncated(cleaned_script):
-                                fixed_script = fix_syntax_v22(cleaned_script)
-                                new_script = fixed_script.strip()
-                                for prefix in ["javascript", "js"]:
-                                    if new_script.lower().startswith(prefix):
-                                        new_script = new_script[len(prefix):].lstrip(':').lstrip('\n').lstrip()
-                                cleaned_script = new_script
+                            attempts += 1
+                        if is_truncated(cleaned_script):
+                            fixed_script = fix_syntax_v22(cleaned_script)
+                            new_script = fixed_script.strip()
+                            for prefix in ["javascript", "js"]:
+                                if new_script.lower().startswith(prefix):
+                                    new_script = new_script[len(prefix):].lstrip(':').lstrip('\n').lstrip()
+                            cleaned_script = new_script
                         value["exec"] = cleaned_script.splitlines() if cleaned_script else []
                     else:
                         value["exec"] = cleaned_script.splitlines()
