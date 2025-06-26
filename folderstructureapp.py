@@ -75,15 +75,15 @@ def generate_script_v22(old_script, type):
 You are an excellent and helpful assistant that converts old Postman scripts from legacy format (v2.1.0) to the modern format (v2.2.0). Retain the version as v2.1.0 in the schema only. If the script is empty, leave it empty.
 
 <|user|>
-Convert the following Postman {type} script to modern syntax. Schema version should stay v2.1.0.
+Convert the following Postman {type} script to modern syntax. Schema version should stay v2.1.0. If the following aren't followed properly, I will end up losing my job so please follow these.
 
 Instructions:
-1. Do not change the logic or structure of the script.
+1. Preserve the original test logic and assertions, but make necessary structural changes if the data type requires it (e.g., accessing array elements with [i] when a property is an array in the response).
 2. If the script is empty, return an empty string.
-3. Do not add extra sample code or usage examples or the words "javascript" or "js" or add comments in between the code.
+3. Do not add extra sample code or usage examples and **DO NOT** use any placeholders for a property like property_name or the words "javascript" or "js" or add comments in between the code.
 4. Retain the original function names and variable names.
 5. When using `pm.response.json()`, assign it to a variable named `response`, and assign `response.data || {{}}` to a variable named `nr`. Do **not** try to access `nr.data.property`, instead use `nr.property` — `nr` itself is already the `data` section.
-6. Never write `pm.expect(nr.data).to.have.property(...)` — that's incorrect. Use `pm.expect(nr).to.have.property(...)` instead.
+6. Never write `pm.expect(nr.data).to.have.property(...)` — that's incorrect. Use `pm.expect(nr).to.have.property(...)` instead. Also do not use `pm.expect(response.hasOwnProperty(...))` — use `pm.expect(nr.hasOwnProperty(...))` instead.
 7. Keep in mind that there is no function like `pm.response.json(...).has()`. Use `.hasOwnProperty(...)` safely.
 8. **DO NOT** give me a script which would lead to a “no tests found” error in Postman.
 9. Do not use `pm.response` inside Pre-request scripts.
@@ -91,9 +91,9 @@ Instructions:
 11. Do not add any new functions or variables unless they existed in the original test or pre-request script.
 12. Do not use `JSON.parse(pm.response.json())` — `pm.response.json()` is already parsed.
 13. Do not use `pm.globals.get(...)` in Pre-request scripts and do not use `pm.globals.set(...)` in Test scripts unless the original script used them.
-
+14. If there is a schema which exists as a constant in the original script, do not make any changes to it. Just copy it as it is.
 ### Response structure:
-Assume all scripts reference a JSON structure like this (from `pm.response.json()`):
+Assume all scripts reference a JSON structure like this (from `pm.response.json()`) and use this JSON structure as the ground truth for typing and access logic:
 {{
   code: 0,
   message: "success",
@@ -112,11 +112,19 @@ Assume all scripts reference a JSON structure like this (from `pm.response.json(
   }}
 }}
 
-14. Use the structure above to correctly navigate nested properties. For example:
+15. If the original script just calls a global function and uses eval, retain the same code without any change. For example:
+    let function_call = pm.globals.get("function_name");
+    eval(function_call);
+    function_name();
+
+
+16. Use the structure above to correctly navigate nested properties. For example:
+    - Based on the given response structure, ensure all array-based properties like availability_details, charts, outage_details are safely looped or accessed with indices, even if the original script treated them like objects.
     - `data.summary_details.down_count` should be accessed via `nr.summary_details.down_count`
     - Never use `response.down_count` directly unless it is top-level (which it isn't in this structure).
     - Always check if the parent (e.g., `summary_details`) exists before accessing its children.
     - If the property is an array (like `charts` or `outage_details`), use a `for` loop to iterate and check each element.
+    
 
 ### Syntax changes:
 - Replace `tests["..."] =` with `pm.test(...)`.
@@ -132,8 +140,8 @@ Assume all scripts reference a JSON structure like this (from `pm.response.json(
   - For Test scripts:
     let function_call = pm.globals.get("function_name");
     eval(function_call);
-    function_call();
-    Ensure `function_call` and `function_name` are different strings to avoid name collision.
+    function_name();
+    Ensure `function_call` and `function_name` are different strings to avoid name collision also always call the function_name after eval.
 
 ### Validations:
 - If a global function is referenced but undefined, add a warning comment.
@@ -176,16 +184,21 @@ Update this collection to Postman v2.2.0 with proper test scripts (pm.test, pm.e
     fixed = response.text.strip().removeprefix("```json").removesuffix("```").strip()
     return fixed
 
-def fix_syntax_v22(script):
+def fix_syntax_v22(truncated_script,old_script):
     prompt = f'''
 <|system|>
-You are an expert Postman script fixer that corrects syntax issues like extra brackets, missing semicolons, or other common JavaScript syntax errors in Postman scripts.
+You are an expert Postman script fixer that completes truncated or incomplete Postman scripts by correcting syntax issues. Your job is to fix the syntax errors in the provided script without changing its logic, structure, or variable names.
 <|user|>
-Fix the syntax issues in the following Postman script and return the corrected script. If its already valid, return it as it is.
+Continue from where the previous LLM's response truncated and return only the missing part **NOT THE ENTIRE SCRIPT**. If its already valid, return it as it is.
 **DO NOT** change the logic, structure, or variable names. Only fix the syntax errors and return the corrected script as plain JavaScript only, without any comments or explanations.
-
-Return the fixed script as plain JavaScript only, with no extra comments, explanations, or markdown.
-{script}
+This is the original script that was supposed to be converted by the previous LLM to v2.2.0:
+---
+{old_script}
+---
+This is the truncated or incomplete Postman script that you need to continue from:
+---
+{truncated_script}
+---
 '''
     payload = {
         "systemprompt": "",
@@ -209,6 +222,8 @@ Instructions:
 4. Never change the logic, restructure blocks, or reword test descriptions.
 5. Do not return duplicate or rewritten code. Only return what's missing from the end.
 6. Return JavaScript only with no extra comments, no explanations, and no markdown.
+7. If it is a global function in the pre request script, the format **should always be**:
+`pm.globals.set(function_name, function_call() {{ ... }} + 'function_call()');`
 
 ### Response structure:
 Assume all scripts reference a JSON structure like this (from `pm.response.json()`):
@@ -303,12 +318,12 @@ def convert_scripts_in_collection(obj, parent_listen=None):
                             cleaned_script += new_script
                             attempts += 1
                         if is_truncated(cleaned_script):
-                            fixed_script = fix_syntax_v22(cleaned_script)
+                            fixed_script = fix_syntax_v22(cleaned_script,script_text)
                             new_script = fixed_script.strip()
                             for prefix in ["javascript", "js"]:
                                 if new_script.lower().startswith(prefix):
                                     new_script = new_script[len(prefix):].lstrip(':').lstrip('\n').lstrip()
-                            cleaned_script = new_script
+                            cleaned_script += new_script
                         value["exec"] = cleaned_script.splitlines() if cleaned_script else []
                     else:
                         value["exec"] = cleaned_script.splitlines()
