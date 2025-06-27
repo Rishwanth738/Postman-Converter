@@ -8,6 +8,17 @@ from dotenv import load_dotenv
 from pathlib import Path
 from io import BytesIO
 from jsonschema import validate
+from datetime import datetime, timedelta
+import time
+
+chat_history = [
+    {"role": "system", "content": "You are a Postman script conversion expert that follows specific conversion rules exactly. Never add extra code or comments."}
+]
+
+def split_script(script, max_lines=100):
+    lines = script.splitlines()
+    for i in range(0, len(lines), max_lines):
+        yield "\n".join(lines[i:i+max_lines])
 
 
 def validate_as_v22_but_save_as_v21(obj):
@@ -16,35 +27,6 @@ def validate_as_v22_but_save_as_v21(obj):
     obj["info"]["schema"] = "https://schema.getpostman.com/json/collection/v2.2.0/collection.json"
     validate(instance=obj, schema=schema)
     obj["info"]["schema"] = "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
-
-
-def salvage_partial_json(raw_str):
-    start = raw_str.find('{')
-    end = raw_str.rfind('}')
-    if start == -1 or end == -1 or end <= start:
-        return None, "No JSON object boundaries found.", False
-    candidate = raw_str[start:end+1]
-    try:
-        decoder = json.JSONDecoder()
-        obj, idx = decoder.raw_decode(candidate)
-        if idx < len(candidate):
-            return obj, "Partial JSON salvaged from truncated output.", True
-        return obj, None, False
-    except Exception:
-        for i in range(len(candidate), 0, -1):
-            try:
-                parsed = json.loads(candidate[:i])
-                return parsed, "Partial JSON salvaged from truncated output.", i < len(candidate)
-            except Exception:
-                continue
-    open_braces = candidate.count('{') - candidate.count('}')
-    open_brackets = candidate.count('[') - candidate.count(']')
-    fixed = candidate + ('}' * open_braces) + (']' * open_brackets)
-    try:
-        return json.loads(fixed), "Partial JSON salvaged by auto-closing braces/brackets.", True
-    except Exception:
-        st.write("Could not salvage any valid JSON from output.")
-        return None, "Could not salvage any valid JSON from output.", False
 
 
 load_dotenv()
@@ -72,51 +54,108 @@ uploaded_zip = st.file_uploader("Upload a zipped folder of Postman collections (
 def generate_script_v22(old_script, type):
     prompt = f'''
 <|system|>
-You are an excellent and helpful assistant that converts old Postman scripts from legacy format (v2.1.0) to the modern format (v2.2.0). Retain the version as v2.1.0 in the schema only. If the script is empty, leave it empty.
+You are a helpful assistant who is better than Postman's Postbot AI which fixes and converts old Postman scripts from legacy format (v2.1.0) to the modern format (v2.2.0). Retain the version as v2.1.0 in the schema only. If the script is empty, leave it empty.
 
 <|user|>
 Convert the following Postman {type} script to modern syntax. Schema version should stay v2.1.0. If the following aren't followed properly, I will end up losing my job so please follow these.
 
 Instructions:
 1. Preserve the original test logic and assertions, but make necessary structural changes if the data type requires it (e.g., accessing array elements with [i] when a property is an array in the response).
-2. If the script is empty, return an empty string.
-3. Do not add extra sample code or usage examples and **DO NOT** use any placeholders for a property like property_name or the words "javascript" or "js" or add comments in between the code.
-4. Retain the original function names and variable names.
-5. When using `pm.response.json()`, assign it to a variable named `response`, and assign `response.data || {{}}` to a variable named `nr`. Do **not** try to access `nr.data.property`, instead use `nr.property` — `nr` itself is already the `data` section.
-6. Never write `pm.expect(nr.data).to.have.property(...)` — that's incorrect. Use `pm.expect(nr).to.have.property(...)` instead. Also do not use `pm.expect(response.hasOwnProperty(...))` — use `pm.expect(nr.hasOwnProperty(...))` instead.
-7. Keep in mind that there is no function like `pm.response.json(...).has()`. Use `.hasOwnProperty(...)` safely.
-8. **DO NOT** give me a script which would lead to a “no tests found” error in Postman.
-9. Do not use `pm.response` inside Pre-request scripts.
-10. Preserve original test descriptions; do not reword test titles.
-11. Do not add any new functions or variables unless they existed in the original test or pre-request script.
-12. Do not use `JSON.parse(pm.response.json())` — `pm.response.json()` is already parsed.
-13. Do not use `pm.globals.get(...)` in Pre-request scripts and do not use `pm.globals.set(...)` in Test scripts unless the original script used them.
-14. If there is a schema which exists as a constant in the original script, do not make any changes to it. Just copy it as it is.
+2. Understand the JSON structure from the older script and see how the properties are called and follow that same manner but with the new code.
+3. If the script is empty, return an empty string and if there are comments in the script, remove them do not change those lines to code.
+4. Do not add extra sample code or usage examples and **DO NOT** use any placeholders for a property like property_name or the words "javascript" or "js" or add comments in between the code.
+5. Retain the original function names and variable names.
+6. When using `pm.response.json()`, assign it to a variable named `response`, and assign `response.data || {{}}` to a variable named `nr`. Do **not** try to access `nr.data.property`, instead use `nr.property` — `nr` itself is already the `data` section.
+7. Never write `pm.expect(nr.data).to.have.property(...)` — that's incorrect. Use `pm.expect(nr).to.have.property(...)` instead. Also do not use `pm.expect(response.hasOwnProperty(...))` — use `pm.expect(nr.hasOwnProperty(...))` instead.
+8. Keep in mind that there is no function like `pm.response.json(...).has()`. Use `.hasOwnProperty(...)` safely.
+9. **DO NOT** give me a script which would lead to a "no tests found" error in Postman.
+10. Do not use `pm.response` inside Pre-request scripts.
+11. Preserve original test descriptions; do not reword test titles.
+12. Do not add any new functions or variables unless they existed in the original test or pre-request script.
+13. Do not use `JSON.parse(pm.response.json())` — `pm.response.json()` is already parsed.
+14. Do not use `pm.globals.get(...)` in Pre-request scripts and do not use `pm.globals.set(...)` in Test scripts unless the original script used them.
+15. If there is a schema which exists as a constant in the original script, do not make any changes to it. Just copy it as it is.
 ### Response structure:
 Assume all scripts reference a JSON structure like this (from `pm.response.json()`) and use this JSON structure as the ground truth for typing and access logic:
 {{
-  code: 0,
-  message: "success",
-  data: {{
-    summary_details: {{
-      down_count: ...,
-      downtime_duration: ...,
-      ...
+  "code": 0,
+  "message": "success",
+  "data": {{
+    "summary_details": {{
+      "down_count": 2,
+      "downtime_duration": 120,
+      "availability_percentage": 99.5,
+      "mtbf": 300,
+      "unmanaged_duration": 10,
+      "alarm_count": 1,
+      "mttr": 60,
+      "maintenance_percentage": 0.5,
+      "maintenance_duration": 30,
+      "availability_duration": 7200,
+      "unmanaged_percentage": 0.2,
+      "downtime_percentage": 0.3,
+      "critical_percentage": 0.1,
+      "critical_count": 1,
+      "critical_duration": 50,
+      "trouble_percentage": 0.2,
+      "trouble_count": 1,
+      "trouble_duration": 70
     }},
-    charts: [...],
-    info: {{...}},
-    availability_details: [...],
-    outage_details: [...],
-    profile_details: {{...}},
-    ...
+    "charts": [
+      {{
+        "name": "Uptime Chart",
+        "data_points": [...]
+      }}
+    ],
+    "info": {{
+      "report_name": "Top N Report",
+      "report_type": 15,
+      "limit": 10,
+      "formatted_start_time": "2024-06-01 00:00:00",
+      "formatted_end_time": "2024-06-30 23:59:59",
+      "start_time": 1717200000000,
+      "end_time": 1719791999000,
+      "generated_time": 1719800000000,
+      "formatted_generated_time": "2024-07-01 00:00:00",
+      "timezone": "Asia/Kolkata",
+      "period": "Last Month",
+      "period_name": "June 2024",
+      "monitor_type": "HOMEPAGE"
+    }},
+    "availability_details": [
+      {{
+        "monitor_id": 12345,
+        "availability": 99.9
+      }}
+    ],
+    "outage_details": [
+      {{
+        "monitor_id": 12345,
+        "outages": [
+          {{
+            "outage_id": "out123",
+            "start_time": 1717500000000,
+            "end_time": 1717500600000,
+            "duration": 60,
+            "type": "critical"
+          }}
+        ]
+      }}
+    ],
+    "profile_details": {{
+      "profile_id": 987,
+      "profile_name": "Critical Monitors"
+    }},
+    "performance_details": {{
+      "HOMEPAGE": {{
+        "name": "Homepage Load",
+        "attribute_data": [...],
+        "availability": [...],
+        "tags": ["web", "latency"]
+      }}
+    }}
   }}
 }}
-
-15. If the original script just calls a global function and uses eval, retain the same code without any change. For example:
-    let function_call = pm.globals.get("function_name");
-    eval(function_call);
-    function_name();
-
 
 16. Use the structure above to correctly navigate nested properties. For example:
     - Based on the given response structure, ensure all array-based properties like availability_details, charts, outage_details are safely looped or accessed with indices, even if the original script treated them like objects.
@@ -143,10 +182,6 @@ Assume all scripts reference a JSON structure like this (from `pm.response.json(
     function_name();
     Ensure `function_call` and `function_name` are different strings to avoid name collision also always call the function_name after eval.
 
-### Validations:
-- If a global function is referenced but undefined, add a warning comment.
-- Never remove or rename variables or change test count.
-
 ### Output:
 Return the converted script **as plain JavaScript only**, with no additional comments, markdown, or explanation.
 
@@ -155,10 +190,11 @@ Return the converted script **as plain JavaScript only**, with no additional com
     payload = {
         "systemprompt": "",
         "userprompt": prompt,
-        "message": [],
-        "model": "gpt-4.1-mini"
+        "max_completion_tokens": 4000,
+        "message": chat_history + [{"role": "user", "content": prompt}],
+        "model": "gpt-4.1 mini"
     }
-    response = requests.post(api_url, json=payload, timeout=3200)
+    response = requests.post(api_url, json=payload, timeout=1600)
     response.raise_for_status()
     return response.text.strip().strip('`\n"\' ')
 
@@ -176,7 +212,8 @@ Update this collection to Postman v2.2.0 with proper test scripts (pm.test, pm.e
     payload = {
         "systemprompt": "",
         "userprompt": prompt,
-        "message": [],
+        "max_completion_tokens": 4000,
+        "message": chat_history + [{"role": "user", "content": prompt}],
         "model": "gpt-4.1-mini"
     }
     response = requests.post(api_url, json=payload, timeout=180)
@@ -189,7 +226,7 @@ def fix_syntax_v22(truncated_script,old_script):
 <|system|>
 You are an expert Postman script fixer that completes truncated or incomplete Postman scripts by correcting syntax issues. Your job is to fix the syntax errors in the provided script without changing its logic, structure, or variable names.
 <|user|>
-Continue from where the previous LLM's response truncated and return only the missing part **NOT THE ENTIRE SCRIPT**. If its already valid, return it as it is.
+Continue from where the previous LLM's response truncated and return only the missing part not including the word from where it ended and **NOT THE ENTIRE SCRIPT**. If its already valid, return it as it is.
 **DO NOT** change the logic, structure, or variable names. Only fix the syntax errors and return the corrected script as plain JavaScript only, without any comments or explanations.
 This is the original script that was supposed to be converted by the previous LLM to v2.2.0:
 ---
@@ -203,8 +240,8 @@ This is the truncated or incomplete Postman script that you need to continue fro
     payload = {
         "systemprompt": "",
         "userprompt": prompt,
-        "message": [],
-        "model": "gpt-4.1-mini"
+        "message": chat_history + [{"role": "user", "content": prompt}],
+        "model": "gpt-4.1 mini"
     }
     response = requests.post(api_url, json=payload, timeout=3200)
     response.raise_for_status()
@@ -223,25 +260,89 @@ Instructions:
 5. Do not return duplicate or rewritten code. Only return what's missing from the end.
 6. Return JavaScript only with no extra comments, no explanations, and no markdown.
 7. If it is a global function in the pre request script, the format **should always be**:
-`pm.globals.set(function_name, function_call() {{ ... }} + 'function_call()');`
+`pm.globals.set(function_name, function_call() {{ ... }} + 'function_call()');` 
+where function_name and function_call are placeholders for the actual global function name and function call.
+8. Understand the JSON structure from the older script and see how the properties are called and follow that same manner but with the new code.
 
 ### Response structure:
 Assume all scripts reference a JSON structure like this (from `pm.response.json()`):
 {{
-  code: 0,
-  message: "success",
-  data: {{
-    summary_details: {{
-      down_count: ...,
-      downtime_duration: ...,
-      ...
+  "code": 0,
+  "message": "success",
+  "data": {{
+    "summary_details": {{
+      "down_count": 2,
+      "downtime_duration": 120,
+      "availability_percentage": 99.5,
+      "mtbf": 300,
+      "unmanaged_duration": 10,
+      "alarm_count": 1,
+      "mttr": 60,
+      "maintenance_percentage": 0.5,
+      "maintenance_duration": 30,
+      "availability_duration": 7200,
+      "unmanaged_percentage": 0.2,
+      "downtime_percentage": 0.3,
+      "critical_percentage": 0.1,
+      "critical_count": 1,
+      "critical_duration": 50,
+      "trouble_percentage": 0.2,
+      "trouble_count": 1,
+      "trouble_duration": 70
     }},
-    charts: [...],
-    info: {{...}},
-    availability_details: [...],
-    outage_details: [...],
-    profile_details: {{...}},
-    ...
+    "charts": [
+      {{
+        "name": "Uptime Chart",
+        "data_points": [...]
+      }}
+    ],
+    "info": {{
+      "report_name": "Top N Report",
+      "report_type": 15,
+      "limit": 10,
+      "formatted_start_time": "2024-06-01 00:00:00",
+      "formatted_end_time": "2024-06-30 23:59:59",
+      "start_time": 1717200000000,
+      "end_time": 1719791999000,
+      "generated_time": 1719800000000,
+      "formatted_generated_time": "2024-07-01 00:00:00",
+      "timezone": "Asia/Kolkata",
+      "period": "Last Month",
+      "period_name": "June 2024",
+      "monitor_type": "HOMEPAGE"
+    }},
+    "availability_details": [
+      {{
+        "monitor_id": 12345,
+        "availability": 99.9
+      }}
+    ],
+    "outage_details": [
+      {{
+        "monitor_id": 12345,
+        "outages": [
+          {{
+            "outage_id": "out123",
+            "start_time": 1717500000000,
+            "end_time": 1717500600000,
+            "duration": 60,
+            "type": "critical"
+          }}
+        ]
+      }}
+    ],
+    "profile_details": {{
+      "profile_id": 987,
+      "profile_name": "Critical Monitors"
+    }},
+    "performance_details": {{
+      "HOMEPAGE": {{
+        "name": "Homepage Load",
+        "attribute_data": [...],
+        "availability": [...],
+        "tags": ["web", "latency"]
+      }}
+    }}
   }}
 }}
 4. Use the structure above to correctly navigate nested properties. For example:
@@ -265,7 +366,8 @@ Please complete and repair the truncated output by appending from the end of the
     payload = {
         "systemprompt": "",
         "userprompt": prompt,
-        "message": [],
+        "max_completion_tokens": 4000,
+        "message": chat_history + [{"role": "user", "content": prompt}],
         "model": "gpt-4.1-mini"
     }
     response = requests.post(api_url, json=payload, timeout=3200)
@@ -304,8 +406,10 @@ def convert_scripts_in_collection(obj, parent_listen=None):
                                     return True
                                 stack.pop()
                         return bool(stack) 
+                    chat_history.append({"role": "assistant", "content": cleaned_script})
                     if not cleaned_script:
                         value["exec"] = []
+                    
                     elif is_truncated(cleaned_script):
                         max_attempts = 7
                         attempts = 0
@@ -316,6 +420,7 @@ def convert_scripts_in_collection(obj, parent_listen=None):
                                 if new_script.lower().startswith(prefix):
                                     new_script = new_script[len(prefix):].lstrip(':').lstrip('\n').lstrip()
                             cleaned_script += new_script
+                            chat_history.append({"role": "assistant", "content": cleaned_script})
                             attempts += 1
                         if is_truncated(cleaned_script):
                             fixed_script = fix_syntax_v22(cleaned_script,script_text)
@@ -324,6 +429,7 @@ def convert_scripts_in_collection(obj, parent_listen=None):
                                 if new_script.lower().startswith(prefix):
                                     new_script = new_script[len(prefix):].lstrip(':').lstrip('\n').lstrip()
                             cleaned_script += new_script
+                            chat_history.append({"role": "assistant", "content": cleaned_script})
                         value["exec"] = cleaned_script.splitlines() if cleaned_script else []
                     else:
                         value["exec"] = cleaned_script.splitlines()
@@ -358,6 +464,12 @@ if uploaded_zip:
         os.makedirs(converted_dir, exist_ok=True)
         converted_files = 0
 
+        total_files = sum(1 for root, _, files in os.walk(extract_dir) for file in files if file.endswith(".json"))
+        progress_bar = st.progress(0)
+        progress_text = st.empty()
+        start_time = time.time()
+        processed_files = 0
+
         for root, _, files in os.walk(extract_dir):
             for file in files:
                 if file.endswith(".json"):
@@ -380,6 +492,19 @@ if uploaded_zip:
                         converted_files += 1
                     except Exception as e:
                         st.error(f"Failed to process {file}: {e}")
+                    processed_files += 1
+                    elapsed = time.time() - start_time
+                    avg_time = elapsed / processed_files if processed_files else 0
+                    files_left = total_files - processed_files
+                    est_time_left = int(avg_time * files_left)
+                    mins, secs = divmod(est_time_left, 60)
+                    progress = processed_files / total_files if total_files else 1
+                    eta = datetime.now() + timedelta(seconds=est_time_left)
+                    eta_str = eta.strftime('%H:%M:%S')
+                    progress_bar.progress(progress)
+                    progress_text.text(f"Processed {processed_files}/{total_files} files. Time left: {mins}m {secs}s. ETA: {eta_str}")
+                    time.sleep(0.01)
+                    
 
         if converted_files == 0:
             st.warning("No valid .json files were converted.")
