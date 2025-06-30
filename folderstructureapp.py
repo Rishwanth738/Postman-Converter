@@ -544,18 +544,15 @@ if uploaded_zip:
         status_text = st.empty()
         start_time = time.time()
 
-        # Collect all JSON files first
         json_files = []
         for root, _, files in os.walk(extract_dir):
             for file in files:
                 if file.endswith(".json"):
                     json_files.append((root, file))
         
-        # Process each file with enhanced progress tracking
         for idx, (root, file) in enumerate(json_files):
             status_text.info(f"🔄 Processing: {file}")
             
-            # Process the file
             input_path = os.path.join(root, file)
             try:
                 with open(input_path, "r", encoding="utf-8") as f:
@@ -573,12 +570,11 @@ if uploaded_zip:
                 with open(out_path, "w", encoding="utf-8") as f:
                     f.write(json.dumps(collection_json, indent=2))
                 converted_files += 1
-                status_text.success(f"✅ Completed: {file}")
+                status_text.success(f"Completed: {file}")
             except Exception as e:
                 st.error(f"❌ Failed to process {file}: {e}")
-                status_text.error(f"❌ Failed: {file}")
-            
-            # Calculate enhanced ETA
+                status_text.error(f" Failed: {file}")
+
             elapsed = time.time() - start_time
             avg_time = elapsed / (idx + 1) if idx + 1 > 0 else 0
             files_left = total_files - (idx + 1)
@@ -586,8 +582,7 @@ if uploaded_zip:
             mins, secs = divmod(est_time_left, 60)
             eta = datetime.now() + timedelta(seconds=est_time_left)
             eta_str = eta.strftime('%H:%M:%S')
-            
-            # Update progress after processing each file
+
             progress = (idx + 1) / total_files
             progress_bar.progress(progress)
             progress_text.text(f"📊 Progress: {idx + 1}/{total_files} | ⏱️ Time left: {mins}m {secs}s | 🎯 ETA: {eta_str}")
@@ -640,7 +635,7 @@ if uploaded_zip:
                         st.error(f"{fname}: {err}")
                 
                 st.download_button(
-                    label="📥 Download Converted Collections (.zip)",
+                    label="Download Converted Collections (.zip)",
                     data=zip_buffer,
                     file_name="converted_postman_jsons.zip",
                     mime="application/zip"
