@@ -64,8 +64,7 @@ Instructions:
 2. Understand the JSON structure from the older script and see how the properties are called and follow that same manner but with the new code.
 3. If the script is empty, return an empty string and if there are comments in the script, remove them do not change those lines to code.
 4. Do not add extra sample code or usage examples and **DO NOT** use any placeholders for a property like property_name or the words "javascript" or "js" or add comments in between the code.
-5. 1.0. **MAKE SURE THE ENTIRE CODE GENERATED IS LESSER THAN YOUR OUTPUT WINDOW AND HENCE WITHIN 150 TO 175 LINES WHILST MAINTAINING THE LOGIC OF THE ORIGINAL SCRIPT**
-For example for multiple different tests, use an array and iterate through it using a for loop and use pm.test() thus reducing the number of lines of the code and be innovative.
+5. Return the full completed code with no syntax errors and same logic as the original script. If you see a const object which is a schema just retain it as it is.
 6. When using `pm.response.json()`, assign it to a variable named `response`, and assign `response.data || {{}}` to a variable named `nr`. Do **not** try to access `nr.data.property`, instead use `nr.property` — `nr` itself is already the `data` section.
 7. Never write `pm.expect(nr.data).to.have.property(...)` — that's incorrect. Use `pm.expect(nr).to.have.property(...)` instead. Also do not use `pm.expect(response.hasOwnProperty(...))` — use `pm.expect(nr.hasOwnProperty(...))` instead.
 8. Keep in mind that there is no function like `pm.response.json(...).has()`. Use `.hasOwnProperty(...)` safely.
@@ -191,8 +190,8 @@ Return the converted script **as plain JavaScript only**, with no additional com
     payload = {
         "systemprompt": "",
         "userprompt": prompt,
-        "max_completion_tokens": 4000,
-        "temperature": 0.85,
+        "max_completion_tokens": 16000,
+        "temperature": 0.15,
         "message": chat_history + [{"role": "user", "content": prompt}],
         "model": "gpt-4.1 mini"
     }
@@ -214,8 +213,8 @@ Update this collection to Postman v2.2.0 with proper test scripts (pm.test, pm.e
     payload = {
         "systemprompt": "",
         "userprompt": prompt,
-        "max_completion_tokens": 4000,
-        "temperature": 0.85,
+        "max_completion_tokens": 16000,
+        "temperature": 0.15,
         "message": chat_history + [{"role": "user", "content": prompt}],
         "model": "gpt-4.1-mini"
     }
@@ -369,8 +368,8 @@ Please complete and repair the truncated output by appending from the end of the
     payload = {
         "systemprompt": "",
         "userprompt": prompt,
-        "max_completion_tokens": 4000,
-        "temperature": 0.85,
+        "max_completion_tokens": 16000,
+        "temperature": 0.15,
         "message": chat_history + [{"role": "user", "content": prompt}],
         "model": "gpt-4.1-mini"
     }
@@ -557,6 +556,6 @@ if uploaded_zip:
                 st.download_button(
                     label="Download Converted Collections (.zip)",
                     data=zip_buffer,
-                    file_name="converted_postman_jsons.zip",
+                    file_name="new_converted_jsons.zip",
                     mime="application/zip"
                 )
